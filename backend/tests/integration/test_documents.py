@@ -37,6 +37,8 @@ async def test_upload_returns_queued_and_location(client, settings):
         / admin["org_id"]
         / "documents"
         / body["document_id"]
+        / "versions"
+        / body["version_id"]
         / "original.pdf"
     )
     assert stored.read_bytes() == content

@@ -17,6 +17,13 @@ dependencies = [
     "pyjwt>=2.9",
     "structlog>=24.4",
     "anyio>=4.4",
+    "pymupdf>=1.28.2",
+    "python-docx>=1.2.0",
+    "charset-normalizer>=3.5.2",
+    "pytesseract>=0.3.13",
+    "pillow>=12.3.0",
+    "langdetect>=1.0.9",
+    "boto3>=1.43.108",
 ]
 
 [dependency-groups]
@@ -27,6 +34,8 @@ dev = [
     "testcontainers[postgres]>=4.8",
     "ruff>=0.6",
     "mypy>=1.11",
+    "moto[server]>=5.2.3",
+    "boto3-stubs>=1.43.108",
 ]
 
 [tool.uv]
@@ -58,6 +67,11 @@ plugins = ["pydantic.mypy"]
 strict = true
 ignore_missing_imports = true
 exclude = ["migrations/"]
+
+[[tool.mypy.overrides]]
+# pymupdf and python-docx ship without type hints.
+module = "app.processing.extraction.extractors"
+disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
 module = "tests.*"

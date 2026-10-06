@@ -14,6 +14,10 @@ COPY app ./app
 
 # --- runtime: no build tools, non-root user --------------------------------------------------
 FROM python:3.12-slim
+# Tesseract does the OCR for scanned pages (the worker needs it; the API shares the image).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 --no-create-home app
 WORKDIR /app
 COPY --from=builder /app /app

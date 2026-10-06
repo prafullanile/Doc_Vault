@@ -3,7 +3,20 @@
 from app.audit.models import AuditLog
 from app.auth.models import RefreshToken, User
 from app.database.base import Base
-from app.documents.models import Document
+from app.documents.models import Document, DocumentPage, DocumentVersion
 from app.organizations.models import Membership, Organization
+from app.processing.models import JobAttempt, ProcessingJob
 
-__all__ = ["AuditLog", "Base", "Document", "Membership", "Organization", "RefreshToken", "User"]
+__all__ = [
+    "AuditLog",
+    "Base",
+    "Document",
+    "DocumentPage",
+    "DocumentVersion",
+    "JobAttempt",
+    "Membership",
+    "Organization",
+    "ProcessingJob",
+    "RefreshToken",
+    "User",
+]

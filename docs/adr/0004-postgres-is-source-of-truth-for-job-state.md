@@ -1,6 +1,6 @@
 # ADR-0004: PostgreSQL is the source of truth for processing state
 
-**Status:** Accepted (shapes Phases 2–3)
+**Status:** Accepted. The queue is implemented in Phase 2 (ADR-0005); the outbox follows in Phase 3.
 
 ## Context
 Uploading a document must create the document and its processing work atomically (§36). It

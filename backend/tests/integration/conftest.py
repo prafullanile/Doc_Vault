@@ -17,16 +17,23 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
 from app.main import create_app
+from app.worker.worker import Worker
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 TEST_DB = "docunexus_test"
 APP_ROLE = "docunexus_test_app"
 APP_PASSWORD = "test-app-password"
+WORKER_ROLE = "docunexus_test_worker"
+WORKER_PASSWORD = "test-worker-password"
 MAX_UPLOAD_BYTES = 1024 * 1024
-TABLES = "users, organizations, memberships, refresh_tokens, documents, audit_logs"
+TABLES = (
+    "users, organizations, memberships, refresh_tokens, documents, document_versions, "
+    "document_pages, processing_jobs, job_attempts, audit_logs"
+)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -78,12 +85,12 @@ async def database(server_url: str) -> AsyncIterator[dict[str, str]]:
     try:
         await admin.execute(f"DROP DATABASE IF EXISTS {TEST_DB} WITH (FORCE)")
         await admin.execute(f"CREATE DATABASE {TEST_DB}")
-        exists = await admin.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", APP_ROLE)
-        if not exists:
-            await admin.execute(
-                f"CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_PASSWORD}' "
-                "NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS"
-            )
+        for role, password in ((APP_ROLE, APP_PASSWORD), (WORKER_ROLE, WORKER_PASSWORD)):
+            if not await admin.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", role):
+                await admin.execute(
+                    f"CREATE ROLE {role} LOGIN PASSWORD '{password}' "
+                    "NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS"
+                )
     finally:
         await admin.close()
 
@@ -95,9 +102,18 @@ async def database(server_url: str) -> AsyncIterator[dict[str, str]]:
         "app_async": _with_db(
             server_url, TEST_DB, user=APP_ROLE, password=APP_PASSWORD, driver="postgresql+asyncpg"
         ),
+        "worker": _with_db(server_url, TEST_DB, user=WORKER_ROLE, password=WORKER_PASSWORD),
+        "worker_async": _with_db(
+            server_url,
+            TEST_DB,
+            user=WORKER_ROLE,
+            password=WORKER_PASSWORD,
+            driver="postgresql+asyncpg",
+        ),
     }
 
     os.environ["DB_APP_ROLE"] = APP_ROLE
+    os.environ["DB_WORKER_ROLE"] = WORKER_ROLE
     config = Config(str(BACKEND_DIR / "alembic.ini"))
     config.attributes["url"] = urls["owner_async"]
     # env.py calls asyncio.run(); keep it off this test event loop.
@@ -115,6 +131,9 @@ def settings(database: dict[str, str], tmp_path_factory: pytest.TempPathFactory)
         jwt_secret="test-secret-" + "x" * 40,
         storage_local_dir=tmp_path_factory.mktemp("storage"),
         max_upload_bytes=MAX_UPLOAD_BYTES,
+        job_max_attempts=3,
+        retry_base_seconds=30,
+        extraction_timeout_seconds=60,
     )
 
 
@@ -159,3 +178,30 @@ async def app_conn(database: dict[str, str]) -> AsyncIterator[asyncpg.Connection
         yield conn
     finally:
         await conn.close()
+
+
+@pytest.fixture
+async def worker_conn(database: dict[str, str]) -> AsyncIterator[asyncpg.Connection]:
+    """A raw connection as the worker role."""
+    conn = await asyncpg.connect(database["worker"])
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
+@pytest.fixture(scope="session")
+async def worker_sessionmaker(
+    database: dict[str, str],
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    engine = create_async_engine(database["worker_async"], pool_size=10)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest.fixture
+def worker(
+    app: FastAPI, settings: Settings, worker_sessionmaker: async_sessionmaker[AsyncSession]
+) -> Worker:
+    """A worker connected as the worker role, sharing the API's storage."""
+    return Worker(settings, worker_sessionmaker, app.state.storage, worker_id="test-worker-1")

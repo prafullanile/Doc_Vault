@@ -77,8 +77,7 @@ async def test_rls_blocks_writing_rows_for_another_tenant(two_tenants, app_conn)
         # ...and inserting a row tagged with A's tenant violates the WITH CHECK policy.
         with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await app_conn.execute(
-                "INSERT INTO documents (id, tenant_id, filename, mime_type, size_bytes, checksum,"
-                " storage_key) VALUES ($1, $2, 'x', 'text/plain', 1, 'abc', 'k')",
+                "INSERT INTO documents (id, tenant_id, filename) VALUES ($1, $2, 'x')",
                 uuid.uuid4(),
                 uuid.UUID(a["org_id"]),
             )

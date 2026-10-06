@@ -1,8 +1,8 @@
 """Alembic environment.
 
 Migrations run as the schema *owner* (MIGRATIONS_DATABASE_URL), separate from the restricted
-role the API uses (DATABASE_URL). DB_APP_ROLE names that restricted role so migrations can
-grant it exactly the privileges it needs.
+roles the API and the worker connect as. DB_APP_ROLE and DB_WORKER_ROLE name those roles so
+migrations can grant each exactly the privileges it needs.
 """
 
 import asyncio
@@ -18,10 +18,16 @@ from app.database.models import Base
 config = context.config
 target_metadata = Base.metadata
 
-app_role = os.environ.get("DB_APP_ROLE", "docunexus_app")
-if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", app_role):
-    raise RuntimeError(f"Invalid DB_APP_ROLE: {app_role!r}")
-config.attributes["app_role"] = app_role
+
+def _role(env_var: str, default: str) -> str:
+    role = os.environ.get(env_var, default)
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", role):
+        raise RuntimeError(f"Invalid {env_var}: {role!r}")
+    return role
+
+
+config.attributes["app_role"] = _role("DB_APP_ROLE", "docunexus_app")
+config.attributes["worker_role"] = _role("DB_WORKER_ROLE", "docunexus_worker")
 
 
 def _url() -> str:

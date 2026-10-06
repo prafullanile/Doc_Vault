@@ -3,6 +3,17 @@ name: docunexus
 x-db-passwords: &db-passwords
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-owner-dev-password}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:-app-dev-password}
+  WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:-worker-dev-password}
+
+# Settings shared by the API and the worker.
+x-app-env: &app-env
+  JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  STORAGE_BACKEND: s3
+  S3_ENDPOINT_URL: http://object-store:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-docunexus-dev}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-docunexus-dev-secret}
+  S3_BUCKET: docunexus
 
 services:
   postgres:
@@ -23,6 +34,39 @@ services:
       timeout: 3s
       retries: 20
 
+  # S3-compatible object storage. RustFS is a MinIO-compatible server (MinIO no longer
+  # publishes community images). Production points the same S3_* settings at AWS S3.
+  object-store:
+    image: rustfs/rustfs:1.0.1
+    depends_on:
+      object-store-permissions:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-docunexus-dev}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-docunexus-dev-secret}
+      RUSTFS_UNSAFE_BYPASS_DISK_CHECK: "true" # single local volume: development only
+    volumes:
+      - objects:/data
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # web console
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  # Named volumes start root-owned; RustFS runs as uid 10001.
+  object-store-permissions:
+    image: alpine:3.20
+    command: ["chown", "-R", "10001:10001", "/data"]
+    volumes:
+      - objects:/data
+
   # One-shot: applies migrations as the schema owner, then exits.
   migrate:
     build: ./backend
@@ -30,6 +74,7 @@ services:
     environment:
       MIGRATIONS_DATABASE_URL: postgresql+asyncpg://docunexus_owner:${POSTGRES_PASSWORD:-owner-dev-password}@postgres:5432/docunexus
       DB_APP_ROLE: docunexus_app
+      DB_WORKER_ROLE: docunexus_worker
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,20 +82,30 @@ services:
   api:
     build: ./backend
     environment:
+      <<: *app-env
       DATABASE_URL: postgresql+asyncpg://docunexus_app:${APP_DB_PASSWORD:-app-dev-password}@postgres:5432/docunexus
-      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      STORAGE_LOCAL_DIR: /app/var/storage
-    volumes:
-      - storage:/app/var/storage
     ports:
       - "8000:8000"
-    depends_on:
+    depends_on: &app-depends
       postgres:
+        condition: service_healthy
+      object-store:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+asyncpg://docunexus_worker:${WORKER_DB_PASSWORD:-worker-dev-password}@postgres:5432/docunexus
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on: *app-depends
+    stop_grace_period: 60s # let in-flight jobs finish on shutdown
+    healthcheck:
+      disable: true # no HTTP server; liveness shows up as job leases being renewed
+
 volumes:
   pgdata:
-  storage:
+  objects:
