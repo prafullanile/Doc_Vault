@@ -1,0 +1,56 @@
+name: docunexus
+
+x-db-passwords: &db-passwords
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-owner-dev-password}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-app-dev-password}
+
+services:
+  postgres:
+    # pgvector is bundled now so Phase 4 (vector search) needs no image change.
+    image: pgvector/pgvector:pg16
+    environment:
+      <<: *db-passwords
+      POSTGRES_USER: docunexus_owner
+      POSTGRES_DB: docunexus
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docunexus_owner -d docunexus"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: applies migrations as the schema owner, then exits.
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://docunexus_owner:${POSTGRES_PASSWORD:-owner-dev-password}@postgres:5432/docunexus
+      DB_APP_ROLE: docunexus_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://docunexus_app:${APP_DB_PASSWORD:-app-dev-password}@postgres:5432/docunexus
+      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      STORAGE_LOCAL_DIR: /app/var/storage
+    volumes:
+      - storage:/app/var/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  storage:

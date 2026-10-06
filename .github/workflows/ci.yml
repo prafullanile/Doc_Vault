@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    name: Lint, type-check, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy app
+      - run: uv run pytest -q
+
+  compose-smoke:
+    name: Docker Compose smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build
+      - name: Wait for readiness
+        run: |
+          for i in $(seq 1 60); do
+            curl -fs localhost:8000/health/ready && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Register and upload
+        run: |
+          TOKEN=$(curl -fs -X POST localhost:8000/v1/auth/register \
+            -H 'content-type: application/json' \
+            -d '{"email":"ci@example.com","password":"correct-horse-battery","organization_name":"CI"}' \
+            | jq -r .access_token)
+          printf '%%PDF-1.7\nci\n' > ci.pdf
+          curl -fs -X POST localhost:8000/v1/documents -H "Authorization: Bearer $TOKEN" -F file=@ci.pdf
+          curl -fs localhost:8000/v1/documents -H "Authorization: Bearer $TOKEN" | jq -e '.items | length == 1'
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
