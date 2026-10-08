@@ -662,6 +662,7 @@ dependencies = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "fastembed" },
+    { name = "httpx" },
     { name = "langdetect" },
     { name = "pgvector" },
     { name = "pillow" },
@@ -680,7 +681,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "boto3-stubs" },
-    { name = "httpx" },
     { name = "moto", extra = ["server"] },
     { name = "mypy" },
     { name = "pytest" },
@@ -700,6 +700,7 @@ requires-dist = [
     { name = "email-validator", specifier = ">=2.2" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastembed", specifier = ">=0.9.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "langdetect", specifier = ">=1.0.9" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -718,7 +719,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3-stubs", specifier = ">=1.43.108" },
-    { name = "httpx", specifier = ">=0.27" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.3" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8.3" },

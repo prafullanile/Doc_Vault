@@ -84,6 +84,12 @@ services:
     environment:
       <<: *app-env
       DATABASE_URL: postgresql+asyncpg://docunexus_app:${APP_DB_PASSWORD:-app-dev-password}@postgres:5432/docunexus
+      # Question answering. Without a key, /v1/query still returns sources (LLM_UNAVAILABLE).
+      LLM_BACKEND: ${LLM_BACKEND:-openai} # openai | gemini | ollama
+      LLM_MODEL: ${LLM_MODEL:-} # empty: the backend's default model
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     ports:
       - "8000:8000"
     depends_on: &app-depends

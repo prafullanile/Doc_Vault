@@ -15,6 +15,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.database.session import create_engine, create_sessionmaker
 from app.documents.storage import StorageError, create_storage
+from app.rag.llm import create_chat_model
 from app.search.embeddings import get_embedder, get_reranker
 
 log = structlog.get_logger(__name__)
@@ -41,13 +42,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.storage = await create_storage(settings)
         # Load the search models in the background, so the first search isn't the slow one.
         warmup = asyncio.create_task(_warm_up_models(settings))
+        app.state.llm = create_chat_model(settings)
         yield
         warmup.cancel()
+        if app.state.llm is not None:
+            await app.state.llm.aclose()
         await engine.dispose()
 
     app = FastAPI(
         title="DocuNexus API",
-        version="0.3.0",
+        version="0.4.0",
         description="Distributed AI-powered document intelligence platform",
         lifespan=lifespan,
     )

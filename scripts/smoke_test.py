@@ -118,7 +118,29 @@ def main() -> None:
         check(token, workdir / "text.pdf", "TEXT", "revenue increased")
         check(token, workdir / "scan.pdf", "OCR", "invoice")
     check_search(token)
+    check_question(token)
     print("Smoke test passed")
+
+
+def check_question(token: str) -> None:
+    """RAG: with an LLM key the answer must cite the right document; without one, the sources
+    must still come back (status LLM_UNAVAILABLE)."""
+    status, body = request(
+        "POST", "/v1/query", token=token, content_type="application/json",
+        body=json.dumps({"question": "By what percentage did revenue increase?"}).encode(),
+    )
+    assert status == 200, (status, body)
+    if not body["sources"] or body["sources"][0]["filename"] != "text.pdf":
+        sys.exit(f"FAILED: question retrieved the wrong sources: {body}")
+    if body["status"] == "LLM_UNAVAILABLE":
+        print("  OK: LLM unavailable (no key, no credits or outage; see `docker compose logs api`)"
+              " -> sources still returned")
+        return
+    cited = [s["filename"] for s in body["sources"] if s["cited"]]
+    if body["status"] != "ANSWERED" or "text.pdf" not in cited:
+        sys.exit(f"FAILED: answer is not grounded in text.pdf: {body}")
+    print(f"  OK: answer ({body['model']}, {body['timings_ms'].get('generation')} ms): "
+          f"{body['answer']!r} cites {cited}")
 
 
 def check_search(token: str) -> None:

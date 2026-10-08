@@ -33,7 +33,7 @@ MAX_UPLOAD_BYTES = 1024 * 1024
 TABLES = (
     "users, organizations, memberships, refresh_tokens, documents, document_versions, "
     "document_pages, document_chunks, chunk_embeddings, processing_jobs, job_attempts, "
-    "audit_logs"
+    "queries, query_sources, audit_logs"
 )
 
 
@@ -138,6 +138,7 @@ def settings(database: dict[str, str], tmp_path_factory: pytest.TempPathFactory)
         # No model downloads in tests: deterministic stand-ins with the same interfaces.
         embedding_backend="hashing",
         reranker_backend="none",
+        llm_backend="fake",
     )
 
 

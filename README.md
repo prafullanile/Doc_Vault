@@ -4,8 +4,8 @@ A distributed, AI-powered document intelligence platform: large-scale document i
 asynchronous processing, hybrid search and source-grounded question answering.
 The full design is in [DocuNexus_Project_Context.md](DocuNexus_Project_Context.md).
 
-**Status: Phase 4 (Search) complete.** Phase 3 (Kafka) is deferred until after the MVP; see
-"What's next" below.
+**Status: MVP complete (Phases 1, 2, 4 and 5).** Phase 3 (Kafka) is deferred until after the
+MVP; see "What's next" below.
 
 - **Phase 1:** authentication, organizations and RBAC, tenant isolation enforced by PostgreSQL
   row-level security, document CRUD, audit logs and CI.
@@ -21,13 +21,19 @@ The full design is in [DocuNexus_Project_Context.md](DocuNexus_Project_Context.m
   - PostgreSQL full-text search.
   - Hybrid retrieval fused with Reciprocal Rank Fusion, then reranked by a cross-encoder.
   - `POST /v1/search`, which explains every result's ranks and scores.
+- **Phase 5:**
+  - `POST /v1/query` answers questions from your documents, citing the pages it used. It
+    supports streaming and follow-up questions.
+  - Invented citations are removed.
+  - Questions with no relevant sources never reach the LLM.
+  - Every answer is stored with its evidence.
 
 ## Quickstart
 
 ```bash
 cp .env.example .env          # optional; the defaults work locally
 docker compose up --build     # postgres, object-store → migrate (one-shot) → api + worker
-python scripts/smoke_test.py  # optional: upload, OCR, then keyword/vector/hybrid search
+python scripts/smoke_test.py  # optional: upload, OCR, search, and a question
 ```
 
 - API: http://localhost:8000. Interactive docs: http://localhost:8000/docs
@@ -48,7 +54,22 @@ curl -s localhost:8000/v1/documents/$DOC/pages  -H "Authorization: Bearer $TOKEN
 
 # Search: hybrid (default), keyword or vector; results cite document and page
 curl -s -X POST localhost:8000/v1/search -H "Authorization: Bearer $TOKEN"   -H 'content-type: application/json' -d '{"query": "how much did revenue grow?", "limit": 5}'
+
+# Ask a question: the answer cites [n] sources (document + page); add "stream": true for SSE
+curl -s -X POST localhost:8000/v1/query -H "Authorization: Bearer $TOKEN"   -H 'content-type: application/json' -d '{"question": "By how much did revenue grow?"}'
 ```
+
+Answers need an LLM. Configure one in a `.env` file next to `docker-compose.yml` (the file is
+git-ignored):
+
+| Provider | `.env` | Notes |
+|---|---|---|
+| Google Gemini | `LLM_BACKEND=gemini`, `GEMINI_API_KEY=...` | Has a free tier (key from aistudio.google.com) |
+| OpenAI | `LLM_BACKEND=openai`, `OPENAI_API_KEY=...` | Prepaid API credits required |
+| Ollama (local) | `LLM_BACKEND=ollama`, `LLM_BASE_URL=...`, `LLM_MODEL=...` | Free, runs on your machine |
+
+`LLM_MODEL` overrides the provider's default model. Without a working LLM, `/v1/query` still
+returns the relevant sources, with status `LLM_UNAVAILABLE`.
 
 ## API (v1)
 
@@ -61,6 +82,7 @@ curl -s -X POST localhost:8000/v1/search -H "Authorization: Bearer $TOKEN"   -H 
 | Processing | `GET /v1/documents/{id}/status` · `POST /v1/documents/{id}/process` (reprocess) · `GET /v1/documents/{id}/pages` |
 | Jobs | `GET /v1/jobs/{id}` (with attempt history) · `POST /v1/jobs/{id}/cancel` |
 | Search | `POST /v1/search`: `mode` (hybrid · keyword · vector), `limit`, `rerank`, `filters` (document IDs, MIME types, languages, dates) |
+| Questions | `POST /v1/query` (`question`, `conversation_id`, `filters`, `stream`) · `GET /v1/queries` (your history) · `GET /v1/queries/{id}` |
 
 **Roles.**
 - All members can read.
@@ -91,6 +113,9 @@ worker ──► claims a job (FOR UPDATE SKIP LOCKED) and holds a lease, renewe
 
 POST /v1/search ──► keyword (tsvector, GIN) ─┐
                 └─► vector (pgvector HNSW)  ─┴─► RRF fusion ─► cross-encoder rerank ─► top k
+
+POST /v1/query ──► search ─► drop weak sources ─► numbered context ─► LLM ─► citation check
+               ──► stored answer + sources   (no relevant sources → "not found", no LLM call)
 ```
 
 - **Bad files** (corrupt, encrypted, zip bombs) fail once, with a clear `error_code`.
@@ -104,16 +129,16 @@ POST /v1/search ──► keyword (tsvector, GIN) ─┐
   keyword-only, and if the reranker fails, the fused order is kept. Both are reported in
   `warnings`.
 
-See ADR-0004 to ADR-0007 for the design.
+See ADR-0004 to ADR-0008 for the design.
 
 ## What's next
 
 | Phase | Status |
 |---|---|
-| 1. Foundation, 2. Document processing, 4. Search | ✅ Done |
-| 3. Async processing | 🟡 Retries, dead-letter, idempotency and workers are done (PostgreSQL queue). Kafka and the outbox come after the MVP. |
-| 5. RAG: LLM answers with citations | ⬜ Next: completes the MVP |
-| 6. ML · 7. Production engineering · 8. Scale | ⬜ |
+| 1. Foundation · 2. Document processing · 4. Search · 5. RAG | ✅ Done: the MVP |
+| 3. Async processing | 🟡 Retries, dead-letter, idempotency and workers are done (PostgreSQL queue). Kafka and the outbox remain. |
+| 7. Production engineering | ⬜ Recommended next: Redis rate limiting (the LLM endpoint costs money), metrics, tracing |
+| 6. ML · 8. Scale | ⬜ |
 
 ## Development
 
@@ -161,6 +186,7 @@ backend/
     documents/      upload validation, storage backends, versions, pages, CRUD
     processing/     job queue, pipeline stages, jobs API
     search/         chunking, embeddings/reranker, RRF fusion, search API
+    rag/            LLM client, prompt and citation checking, question answering API
       extraction/   PDF/DOCX/TXT/image extractors, OCR, subprocess runner
     worker/         the worker process (python -m app.worker)
     audit/          append-only audit log

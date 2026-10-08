@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -74,6 +74,23 @@ class Settings(BaseSettings):
     # Search: candidates fetched from each retriever, and how many of the fused list to rerank.
     search_candidates: int = 50
     rerank_candidates: int = 30
+
+    # Question answering (RAG). Any OpenAI-compatible chat API: OpenAI, Google Gemini (via its
+    # OpenAI-compatible endpoint) or a local Ollama. "fake" is a deterministic stand-in for tests.
+    llm_backend: Literal["openai", "gemini", "ollama", "fake"] = "openai"
+    llm_model: str | None = None  # None/empty: the backend's default model
+    llm_base_url: str | None = None  # None/empty: the backend's standard URL
+    openai_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    llm_timeout_seconds: float = 60.0
+    llm_max_output_tokens: int = 800
+    llm_temperature: float | None = None  # None: the model's default (some models allow no other)
+    rag_context_chunks: int = 6  # sources given to the model
+    rag_max_context_chars: int = 12_000
+    # Sources the cross-encoder scores below this are dropped before generation, so the model
+    # isn't handed irrelevant text to "answer" from. ms-marco logits: relevant passages > 0.
+    rag_min_rerank_score: float = -4.0
+    rag_history_turns: int = 3  # earlier Q&A pairs of the conversation sent with a follow-up
 
 
 @lru_cache
