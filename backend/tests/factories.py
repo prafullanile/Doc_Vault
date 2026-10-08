@@ -24,7 +24,7 @@ def text_pdf(pages: list[str], marker: str | None = None) -> bytes:
         if text:
             page.insert_textbox(pymupdf.Rect(72, 72, 540, 770), text, fontsize=11)
     document.set_metadata({"title": marker or uuid.uuid4().hex})
-    data: bytes = document.tobytes()
+    data: bytes = document.tobytes(deflate=True)
     document.close()
     return data
 
@@ -48,7 +48,7 @@ def scanned_pdf(text: str) -> bytes:
     document = pymupdf.open()
     page = document.new_page()
     page.insert_image(pymupdf.Rect(36, 36, 576, 171), stream=png(text))
-    data: bytes = document.tobytes()
+    data: bytes = document.tobytes(deflate=True)
     document.close()
     return data
 
