@@ -125,9 +125,15 @@ def test_scanned_pdf_without_tesseract_fails_clearly(tmp_path):
 
 
 def test_pipeline_order():
-    assert PIPELINE == (JobType.EXTRACT_TEXT, JobType.DETECT_LANGUAGE)
+    assert PIPELINE == (
+        JobType.EXTRACT_TEXT,
+        JobType.DETECT_LANGUAGE,
+        JobType.CHUNK,
+        JobType.EMBED,
+    )
     assert next_stage(JobType.EXTRACT_TEXT) == JobType.DETECT_LANGUAGE
-    assert next_stage(JobType.DETECT_LANGUAGE) is None
+    assert next_stage(JobType.CHUNK) == JobType.EMBED
+    assert next_stage(JobType.EMBED) is None
 
 
 @pytest.mark.parametrize("entry_module", ["app.worker.__main__", "app.main"])

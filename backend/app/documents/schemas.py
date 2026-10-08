@@ -56,6 +56,7 @@ class VersionOut(BaseModel):
     page_count: int | None
     ocr_page_count: int | None
     language: str | None
+    chunk_count: int | None
     error_code: str | None
     pipeline_version: str | None
     created_at: datetime

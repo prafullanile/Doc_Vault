@@ -12,7 +12,7 @@ from app.documents.storage import StorageError
 from app.processing import queue
 from app.processing.extraction.ocr import tesseract_available
 from app.processing.models import JobType
-from app.processing.stages import STAGES, StageContext
+from app.processing.stages import PIPELINE, STAGES, StageContext
 from app.worker.worker import Worker
 from tests import factories
 from tests.integration.helpers import auth, register
@@ -80,7 +80,7 @@ async def test_pdf_is_extracted_page_by_page(client, worker):
     token = admin["access_token"]
     up = await upload_pdf(client, token, [factories.SAMPLE_ENGLISH, "", "Third page text here."])
 
-    assert await drain(worker) == 2  # EXTRACT_TEXT, then DETECT_LANGUAGE
+    assert await drain(worker) == 4  # EXTRACT_TEXT → DETECT_LANGUAGE → CHUNK → EMBED
 
     status = await status_of(client, token, up["document_id"])
     assert status["status"] == "PROCESSED"
@@ -92,7 +92,10 @@ async def test_pdf_is_extracted_page_by_page(client, worker):
     assert [(j["job_type"], j["status"], j["attempt"]) for j in status["jobs"]] == [
         ("EXTRACT_TEXT", "COMPLETED", 1),
         ("DETECT_LANGUAGE", "COMPLETED", 1),
+        ("CHUNK", "COMPLETED", 1),
+        ("EMBED", "COMPLETED", 1),
     ]
+    assert version["chunk_count"] == 2  # the blank page yields no chunk
 
     pages = (
         await client.get(f"/v1/documents/{up['document_id']}/pages", headers=auth(token))
@@ -468,7 +471,7 @@ async def test_reprocess_rules(client, worker, owner_conn):
 
     status = await status_of(client, token, up["document_id"])
     assert status["status"] == "PROCESSED"
-    assert [j["job_type"] for j in status["jobs"]] == ["EXTRACT_TEXT", "DETECT_LANGUAGE"] * 2
+    assert [j["job_type"] for j in status["jobs"]] == list(PIPELINE) * 2
     # Re-running replaced the pages instead of adding a second copy.
     assert await owner_conn.fetchval("SELECT count(*) FROM document_pages") == 2
 
@@ -580,7 +583,7 @@ async def test_worker_role_sees_the_queue_but_not_documents_without_a_tenant(
     await upload_pdf(client, a["access_token"])
     await drain(worker)
     # The worker must see every tenant's jobs to claim them...
-    assert await worker_conn.fetchval("SELECT count(*) FROM processing_jobs") == 2
+    assert await worker_conn.fetchval("SELECT count(*) FROM processing_jobs") == len(PIPELINE)
     # ...but document data stays behind RLS until it binds the job's tenant.
     for table in ("documents", "document_versions", "document_pages"):
         assert await worker_conn.fetchval(f"SELECT count(*) FROM {table}") == 0  # noqa: S608

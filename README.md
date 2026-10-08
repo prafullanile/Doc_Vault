@@ -4,7 +4,8 @@ A distributed, AI-powered document intelligence platform: large-scale document i
 asynchronous processing, hybrid search and source-grounded question answering.
 The full design is in [DocuNexus_Project_Context.md](DocuNexus_Project_Context.md).
 
-**Status: Phase 2 (Document Processing) complete.**
+**Status: Phase 4 (Search) complete.** Phase 3 (Kafka) is deferred until after the MVP; see
+"What's next" below.
 
 - **Phase 1:** authentication, organizations and RBAC, tenant isolation enforced by PostgreSQL
   row-level security, document CRUD, audit logs and CI.
@@ -14,13 +15,19 @@ The full design is in [DocuNexus_Project_Context.md](DocuNexus_Project_Context.m
     dead-letter state and cancellation.
   - Page-by-page text extraction for PDF, DOCX, TXT and images, with OCR on scanned pages.
   - Language detection.
+- **Phase 4:**
+  - Page-bounded chunking.
+  - Local embeddings (bge-small) stored in pgvector.
+  - PostgreSQL full-text search.
+  - Hybrid retrieval fused with Reciprocal Rank Fusion, then reranked by a cross-encoder.
+  - `POST /v1/search`, which explains every result's ranks and scores.
 
 ## Quickstart
 
 ```bash
 cp .env.example .env          # optional; the defaults work locally
 docker compose up --build     # postgres, object-store → migrate (one-shot) → api + worker
-./scripts/smoke_test.sh       # optional: uploads a text PDF and a scanned PDF end to end
+python scripts/smoke_test.py  # optional: upload, OCR, then keyword/vector/hybrid search
 ```
 
 - API: http://localhost:8000. Interactive docs: http://localhost:8000/docs
@@ -38,6 +45,9 @@ curl -s -X POST localhost:8000/v1/documents -H "Authorization: Bearer $TOKEN" -F
 # Watch it move QUEUED → PROCESSING → PROCESSED, then read the extracted pages
 curl -s localhost:8000/v1/documents/$DOC/status -H "Authorization: Bearer $TOKEN"
 curl -s localhost:8000/v1/documents/$DOC/pages  -H "Authorization: Bearer $TOKEN"
+
+# Search: hybrid (default), keyword or vector; results cite document and page
+curl -s -X POST localhost:8000/v1/search -H "Authorization: Bearer $TOKEN"   -H 'content-type: application/json' -d '{"query": "how much did revenue grow?", "limit": 5}'
 ```
 
 ## API (v1)
@@ -50,6 +60,7 @@ curl -s localhost:8000/v1/documents/$DOC/pages  -H "Authorization: Bearer $TOKEN
 | Versions | `POST /v1/documents/{id}/versions` (multipart) · `GET /v1/documents/{id}/versions` |
 | Processing | `GET /v1/documents/{id}/status` · `POST /v1/documents/{id}/process` (reprocess) · `GET /v1/documents/{id}/pages` |
 | Jobs | `GET /v1/jobs/{id}` (with attempt history) · `POST /v1/jobs/{id}/cancel` |
+| Search | `POST /v1/search`: `mode` (hybrid · keyword · vector), `limit`, `rerank`, `filters` (document IDs, MIME types, languages, dates) |
 
 **Roles.**
 - All members can read.
@@ -76,7 +87,10 @@ POST /v1/documents ──► one transaction: document + version 1 + EXTRACT_TEX
 worker ──► claims a job (FOR UPDATE SKIP LOCKED) and holds a lease, renewed by heartbeat
        ──► EXTRACT_TEXT: download → extract in a sandboxed subprocess → pages
        ──► completion transaction: save pages + mark job done + enqueue DETECT_LANGUAGE
-       ──► DETECT_LANGUAGE → version and document marked PROCESSED
+       ──► DETECT_LANGUAGE → CHUNK → EMBED → version and document marked PROCESSED
+
+POST /v1/search ──► keyword (tsvector, GIN) ─┐
+                └─► vector (pgvector HNSW)  ─┴─► RRF fusion ─► cross-encoder rerank ─► top k
 ```
 
 - **Bad files** (corrupt, encrypted, zip bombs) fail once, with a clear `error_code`.
@@ -86,7 +100,20 @@ worker ──► claims a job (FOR UPDATE SKIP LOCKED) and holds a lease, renewe
 - **Stalled workers:** fencing stops a worker that lost its lease from overwriting a newer
   attempt.
 
-See ADR-0004 to ADR-0006 for the design.
+- **Search degrades gracefully:** if the embedding model is down, hybrid search falls back to
+  keyword-only, and if the reranker fails, the fused order is kept. Both are reported in
+  `warnings`.
+
+See ADR-0004 to ADR-0007 for the design.
+
+## What's next
+
+| Phase | Status |
+|---|---|
+| 1. Foundation, 2. Document processing, 4. Search | ✅ Done |
+| 3. Async processing | 🟡 Retries, dead-letter, idempotency and workers are done (PostgreSQL queue). Kafka and the outbox come after the MVP. |
+| 5. RAG: LLM answers with citations | ⬜ Next: completes the MVP |
+| 6. ML · 7. Production engineering · 8. Scale | ⬜ |
 
 ## Development
 
@@ -98,12 +125,20 @@ uv run pytest                 # unit + integration tests
 ```
 
 Integration tests run against a real PostgreSQL server, using the real migrations and RLS
-policies. Set `TEST_POSTGRES_URL` to a server where that user can create databases and roles
-(for example `postgresql://postgres:postgres@localhost:5432/postgres`). If it isn't set, the
-tests start a container through testcontainers, which needs Docker.
+policies. Set `TEST_POSTGRES_URL` to a server where that user can create databases and roles.
+With `docker compose up` running, the Compose database works (tests use a separate
+`docunexus_test` database):
+
+```bash
+TEST_POSTGRES_URL=postgresql://docunexus_owner:owner-dev-password@localhost:5432/postgres uv run pytest
+```
+
+If it isn't set, the tests start their own container through testcontainers.
 
 - S3 storage tests use moto's in-process S3 server, so they need no Docker.
 - OCR tests are skipped unless Tesseract is installed. CI installs it.
+- Search tests use a deterministic hashing embedder. `RUN_MODEL_TESTS=1` also runs the real
+  embedding and reranking models (about 150 MB download, cached; CI runs it).
 
 To run outside Docker:
 
@@ -125,6 +160,7 @@ backend/
     organizations/  organizations, memberships, member management
     documents/      upload validation, storage backends, versions, pages, CRUD
     processing/     job queue, pipeline stages, jobs API
+    search/         chunking, embeddings/reranker, RRF fusion, search API
       extraction/   PDF/DOCX/TXT/image extractors, OCR, subprocess runner
     worker/         the worker process (python -m app.worker)
     audit/          append-only audit log

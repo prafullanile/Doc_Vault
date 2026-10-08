@@ -101,6 +101,7 @@ class DocumentVersion(UUIDPrimaryKey, Base):
     page_count: Mapped[int | None] = mapped_column(Integer)
     ocr_page_count: Mapped[int | None] = mapped_column(Integer)
     language: Mapped[str | None] = mapped_column(String(16))
+    chunk_count: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[str | None] = mapped_column(String(64))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -26,6 +26,8 @@ from app.database.base import Base, Timestamps, UUIDPrimaryKey
 class JobType(StrEnum):
     EXTRACT_TEXT = "EXTRACT_TEXT"
     DETECT_LANGUAGE = "DETECT_LANGUAGE"
+    CHUNK = "CHUNK"
+    EMBED = "EMBED"
 
 
 class JobStatus(StrEnum):

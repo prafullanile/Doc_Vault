@@ -32,7 +32,8 @@ WORKER_PASSWORD = "test-worker-password"
 MAX_UPLOAD_BYTES = 1024 * 1024
 TABLES = (
     "users, organizations, memberships, refresh_tokens, documents, document_versions, "
-    "document_pages, processing_jobs, job_attempts, audit_logs"
+    "document_pages, document_chunks, chunk_embeddings, processing_jobs, job_attempts, "
+    "audit_logs"
 )
 
 
@@ -134,6 +135,9 @@ def settings(database: dict[str, str], tmp_path_factory: pytest.TempPathFactory)
         job_max_attempts=3,
         retry_base_seconds=30,
         extraction_timeout_seconds=60,
+        # No model downloads in tests: deterministic stand-ins with the same interfaces.
+        embedding_backend="hashing",
+        reranker_backend="none",
     )
 
 

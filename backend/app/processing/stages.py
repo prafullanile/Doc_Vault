@@ -9,10 +9,12 @@ A stage has two halves:
 """
 
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from anyio import to_thread
 from langdetect import DetectorFactory, LangDetectException, detect
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -26,9 +28,18 @@ from app.processing.extraction.runner import run_extraction
 from app.processing.extraction.types import ExtractionResult
 from app.processing.models import JobType
 from app.processing.queue import ClaimedJob
+from app.search.chunking import CHUNKER_VERSION, Chunk, PageText, chunk_pages
+from app.search.embeddings import get_embedder
+from app.search.models import ChunkEmbedding, DocumentChunk
 
-PIPELINE_VERSION = "2026.10-p2"
-PIPELINE: tuple[JobType, ...] = (JobType.EXTRACT_TEXT, JobType.DETECT_LANGUAGE)
+PIPELINE_VERSION = f"2026.10-p4+{CHUNKER_VERSION}"
+PIPELINE: tuple[JobType, ...] = (
+    JobType.EXTRACT_TEXT,
+    JobType.DETECT_LANGUAGE,
+    JobType.CHUNK,
+    JobType.EMBED,
+)
+EMBED_SLICE = 64  # chunks per model call; the stage can be cancelled between slices
 
 DetectorFactory.seed = 0  # langdetect is randomised; make it deterministic
 LANGUAGE_SAMPLE_CHARS = 20_000
@@ -143,7 +154,111 @@ class DetectLanguageStage:
         )
 
 
+class ChunkStage:
+    job_type = JobType.CHUNK
+
+    async def execute(self, ctx: StageContext) -> list[Chunk]:
+        async with ctx.sessionmaker() as session:
+            await bind_tenant(session, ctx.job.tenant_id)
+            rows = (
+                await session.execute(
+                    select(DocumentPage.page_number, DocumentPage.text, DocumentPage.section)
+                    .where(DocumentPage.version_id == ctx.job.version_id)
+                    .order_by(DocumentPage.page_number)
+                )
+            ).all()
+        pages = [PageText(number, text, section) for number, text, section in rows]
+        return chunk_pages(pages, ctx.settings.chunk_target_words, ctx.settings.chunk_overlap_words)
+
+    async def persist(self, session: AsyncSession, ctx: StageContext, result: list[Chunk]) -> None:
+        job = ctx.job
+        # Deleting the chunks cascades to their embeddings; EMBED rebuilds them next.
+        await session.execute(
+            delete(DocumentChunk).where(DocumentChunk.version_id == job.version_id)
+        )
+        if result:
+            await session.execute(
+                insert(DocumentChunk),
+                [
+                    {
+                        "id": uuid.uuid4(),
+                        "tenant_id": job.tenant_id,
+                        "version_id": job.version_id,
+                        "position": chunk.position,
+                        "page_number": chunk.page_number,
+                        "section": chunk.section,
+                        "text": chunk.text,
+                        "token_count": chunk.token_count,
+                    }
+                    for chunk in result
+                ],
+            )
+        await session.execute(
+            update(DocumentVersion)
+            .where(DocumentVersion.id == job.version_id)
+            .values(chunk_count=len(result))
+        )
+
+
+@dataclass
+class EmbeddingResult:
+    model: str
+    vectors: list[tuple[uuid.UUID, list[float]]]
+
+
+class EmbedStage:
+    job_type = JobType.EMBED
+
+    async def execute(self, ctx: StageContext) -> EmbeddingResult:
+        async with ctx.sessionmaker() as session:
+            await bind_tenant(session, ctx.job.tenant_id)
+            rows = (
+                await session.execute(
+                    select(DocumentChunk.id, DocumentChunk.text)
+                    .where(DocumentChunk.version_id == ctx.job.version_id)
+                    .order_by(DocumentChunk.position)
+                )
+            ).all()
+        embedder = await to_thread.run_sync(get_embedder, ctx.settings)  # loads once per process
+        vectors: list[tuple[uuid.UUID, list[float]]] = []
+        for start in range(0, len(rows), EMBED_SLICE):
+            batch = rows[start : start + EMBED_SLICE]
+            embedded = await to_thread.run_sync(
+                embedder.embed_documents, [text for _, text in batch]
+            )
+            vectors.extend(
+                (chunk_id, vec) for (chunk_id, _), vec in zip(batch, embedded, strict=True)
+            )
+        return EmbeddingResult(model=embedder.model_name, vectors=vectors)
+
+    async def persist(
+        self, session: AsyncSession, ctx: StageContext, result: EmbeddingResult
+    ) -> None:
+        job = ctx.job
+        await session.execute(
+            delete(ChunkEmbedding).where(
+                ChunkEmbedding.version_id == job.version_id, ChunkEmbedding.model == result.model
+            )
+        )
+        if result.vectors:
+            await session.execute(
+                insert(ChunkEmbedding),
+                [
+                    {
+                        "chunk_id": chunk_id,
+                        "model": result.model,
+                        "tenant_id": job.tenant_id,
+                        "version_id": job.version_id,
+                        "embedding": vector,
+                    }
+                    for chunk_id, vector in result.vectors
+                ],
+            )
+
+
 STAGES: dict[JobType, Stage] = {
     JobType.EXTRACT_TEXT: ExtractTextStage(),
     JobType.DETECT_LANGUAGE: DetectLanguageStage(),
+    JobType.CHUNK: ChunkStage(),
+    JobType.EMBED: EmbedStage(),
 }

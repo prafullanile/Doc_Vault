@@ -1,7 +1,9 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
+from anyio import to_thread
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -13,8 +15,18 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.database.session import create_engine, create_sessionmaker
 from app.documents.storage import StorageError, create_storage
+from app.search.embeddings import get_embedder, get_reranker
 
 log = structlog.get_logger(__name__)
+
+
+async def _warm_up_models(settings: Settings) -> None:
+    try:
+        await to_thread.run_sync(get_embedder, settings)
+        await to_thread.run_sync(get_reranker, settings)
+        log.info("search_models_ready", embedding_model=settings.embedding_model)
+    except Exception as exc:  # search degrades instead (see app/search/service.py)
+        log.error("search_models_unavailable", error=str(exc))
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -27,12 +39,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.sessionmaker = create_sessionmaker(engine)
         app.state.storage = await create_storage(settings)
+        # Load the search models in the background, so the first search isn't the slow one.
+        warmup = asyncio.create_task(_warm_up_models(settings))
         yield
+        warmup.cancel()
         await engine.dispose()
 
     app = FastAPI(
         title="DocuNexus API",
-        version="0.2.0",
+        version="0.3.0",
         description="Distributed AI-powered document intelligence platform",
         lifespan=lifespan,
     )

@@ -8,6 +8,11 @@ WORKDIR /app
 # Dependencies first, so code changes don't invalidate this layer.
 COPY pyproject.toml uv.lock .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+# Bake the embedding and reranking models into the image: containers start without network
+# access and every replica runs exactly the same model files. Keep in sync with app settings.
+ARG EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+ARG RERANKER_MODEL=Xenova/ms-marco-MiniLM-L-6-v2
+RUN /app/.venv/bin/python -c "from fastembed import TextEmbedding; from fastembed.rerank.cross_encoder import TextCrossEncoder; TextEmbedding('${EMBEDDING_MODEL}', cache_dir='/app/models'); TextCrossEncoder('${RERANKER_MODEL}', cache_dir='/app/models')"
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
@@ -22,7 +27,7 @@ RUN useradd --system --uid 10001 --no-create-home app
 WORKDIR /app
 COPY --from=builder /app /app
 RUN mkdir -p /app/var/storage && chown app:app /app/var/storage
-ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1     MODEL_CACHE_DIR=/app/models HF_HUB_OFFLINE=1
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \

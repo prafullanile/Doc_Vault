@@ -21,10 +21,17 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      RUN_MODEL_TESTS: "1"
+      MODEL_CACHE_DIR: ${{ github.workspace }}/.model-cache
     steps:
       - uses: actions/checkout@v5
       - name: Install Tesseract (OCR tests)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - name: Cache embedding and reranking models
+        uses: actions/cache@v4
+        with:
+          path: .model-cache
+          key: models-bge-small-en-v1.5-ms-marco-MiniLM-L-6-v2
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -40,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: docker compose up -d --build
-      - run: ./scripts/smoke_test.sh
+      - run: python3 scripts/smoke_test.py
       - if: failure()
         run: docker compose ps -a && docker compose logs
       - if: always()

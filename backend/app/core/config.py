@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     ocr_dpi: int = 200
     ocr_min_chars: int = 25  # a page with less extractable text than this gets OCR'd
 
+    # Chunking (see app/search/chunking.py). Words, not tokens: ~1.3 tokens per English word,
+    # so 180 words stays well inside the embedding model's 512-token window.
+    chunk_target_words: int = 180
+    chunk_overlap_words: int = 30
+
+    # Embeddings and reranking run locally on CPU via fastembed (ONNX); no paid API.
+    # "hashing" is a deterministic stand-in for tests: no model download, same interface.
+    embedding_backend: Literal["fastembed", "hashing"] = "fastembed"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_batch_size: int = 32
+    reranker_backend: Literal["fastembed", "none"] = "fastembed"
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    model_cache_dir: Path | None = None  # None: fastembed's default cache
+
+    # Search: candidates fetched from each retriever, and how many of the fused list to rerank.
+    search_candidates: int = 50
+    rerank_candidates: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:
